@@ -1,0 +1,43 @@
+# Compiled binaries
+einz
+einz_asan
+*.out
+a.out
+
+# Object / IR files
+*.o
+*.obj
+*.gch
+*.pch
+
+# Debug info
+*.dSYM/
+*.su
+*.idb
+*.pdb
+
+# Static / shared libraries
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+
+# Build directories
+build/
+cmake-build-*/
+
+# Editor / IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.cache/
+
+# macOS
+.DS_Store
+
+# Local environment
+.envrc
