@@ -1,6 +1,10 @@
 # project-einz
 
-Terminal-based ECS shooter written in C++ as a learning project. Single file, no external dependencies beyond POSIX (termios) and the C++ stdlib.
+Terminal-based ECS shooter written in C++ as a learning project.
+
+**▶ Play in browser:** <https://nanot1m.github.io/project-einz/>
+
+Also runs in a POSIX terminal (macOS / Linux). Single codebase — only the backend (terminal vs wasm) differs.
 
 ## Features
 
