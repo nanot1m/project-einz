@@ -4,6 +4,13 @@ einz_asan
 *.out
 a.out
 
+# Emscripten/wasm build artifacts
+einz.html
+einz.js
+einz.wasm
+einz.data
+einz.worker.js
+
 # Object / IR files
 *.o
 *.obj

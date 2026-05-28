@@ -1,0 +1,132 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>project-einz (wasm)</title>
+  <style>
+    html, body {
+      background: #0a0a0a;
+      color: #cccccc;
+      font-family: ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+      margin: 0;
+      padding: 12px;
+    }
+    h1 {
+      font-size: 14px;
+      font-weight: normal;
+      color: #666;
+      margin: 0 0 8px 0;
+    }
+    #screen {
+      line-height: 1.0;
+      font-size: 13px;
+      letter-spacing: 0;
+      white-space: pre;
+      user-select: none;
+    }
+    /* Color classes mirror color_seqs[] indices in platform/engine. */
+    .c0  { color: #4a9aff; font-weight: bold; }   /* player blue */
+    .c1  { color: #ff5252; font-weight: bold; }   /* enemy red / heart filled */
+    .c2  { color: #c965ff; font-weight: bold; }   /* strong magenta */
+    .c3  { color: #ffcc33; font-weight: bold; }   /* yellow */
+    .c4  { color: #ffffff; font-weight: bold; }   /* bullets */
+    .c5  { color: #5ad465; font-weight: bold; }   /* grass / tree green */
+    .c6  { color: #4a4a4a; }                      /* wall dim */
+    .c7  { color: #707070; }                      /* floor gray / empty heart */
+    .c8  { color: #cccccc; }                      /* HUD default */
+    .c9  { color: #2dd4ff; font-weight: bold; }   /* water cyan */
+    .c10 { color: #c97a2f; }                      /* bridge brown */
+  </style>
+</head>
+<body tabindex="0">
+  <h1>project-einz · arrows = move · space/J = shoot · R = restart · Q = quit</h1>
+  <pre id="screen"></pre>
+  <script>
+    var screenEl = document.getElementById('screen');
+    var spans = null;
+    var widthCache = 0;
+    var heightCache = 0;
+    var prevFrame = null;
+    var keyQueue = [];
+
+    function setupGrid(w, h) {
+      widthCache = w;
+      heightCache = h;
+      screenEl.innerHTML = '';
+      spans = new Array(w * h);
+      for (var y = 0; y < h; ++y) {
+        for (var x = 0; x < w; ++x) {
+          var s = document.createElement('span');
+          s.textContent = ' ';
+          screenEl.appendChild(s);
+          spans[y * w + x] = s;
+        }
+        screenEl.appendChild(document.createTextNode('\n'));
+      }
+      prevFrame = new Int16Array(w * h);
+    }
+
+    function glyph(ch) {
+      switch (ch) {
+        case 35:  return '▓';  // '#' → ▓
+        case 72:  return '♥';  // 'H' → ♥
+        case 104: return '♡';  // 'h' → ♡
+        default:  return String.fromCharCode(ch);
+      }
+    }
+
+    // Called by C++ each frame (~once per requestAnimationFrame).
+    // ptr: pointer into wasm memory to width*height of {char, int8 color}.
+    window.render_frame = function(ptr, w, h) {
+      if (w !== widthCache || h !== heightCache) setupGrid(w, h);
+      var heap = Module.HEAP8;
+      for (var i = 0; i < w * h; ++i) {
+        var ch    = heap[ptr + i * 2];
+        var color = heap[ptr + i * 2 + 1];
+        // Pack into 16 bits: lower 8 = char, upper 8 = signed color
+        var word = (ch & 0xff) | ((color & 0xff) << 8);
+        if (word !== prevFrame[i]) {
+          var span = spans[i];
+          span.textContent = glyph(ch & 0xff);
+          span.className = color < 0 ? '' : ('c' + color);
+          prevFrame[i] = word;
+        }
+      }
+    };
+
+    // Key codes must mirror enum Key in platform.hpp:
+    //   None=0, Up=1, Down=2, Left=3, Right=4, Shoot=5, Restart=6, Quit=7
+    var keyMap = {
+      'ArrowUp':    1,
+      'ArrowDown':  2,
+      'ArrowLeft':  3,
+      'ArrowRight': 4,
+      ' ':          5,
+      'j':          5,
+      'J':          5,
+      'r':          6,
+      'R':          6,
+      'q':          7,
+      'Q':          7
+    };
+
+    window.install_input_handler = function() {
+      window.addEventListener('keydown', function(e) {
+        var k = keyMap[e.key];
+        if (k !== undefined) {
+          keyQueue.push(k);
+          e.preventDefault();
+        }
+      });
+      document.body.focus();
+    };
+
+    window.poll_key = function() {
+      return keyQueue.length === 0 ? 0 : keyQueue.shift();
+    };
+
+    var Module = {};
+  </script>
+  {{{ SCRIPT }}}
+</body>
+</html>

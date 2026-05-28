@@ -30,12 +30,25 @@ Terminal-based ECS shooter written in C++ as a learning project. Single file, no
 
 ## Build & Run
 
+### Terminal (POSIX)
+
 ```bash
 clang++ ./project-einz.cpp -o einz
 ./einz
 ```
 
-Tested on macOS (libc++, clang). POSIX-only — needs `<termios.h>`/`<unistd.h>`/`<fcntl.h>`. Won't build on Windows without a port.
+Tested on macOS (libc++, clang). Needs `<termios.h>`/`<unistd.h>`/`<fcntl.h>`.
+
+### Web (WebAssembly via emscripten)
+
+```bash
+emcc wasm-einz.cpp -o einz.html --shell-file shell.html -O2 \
+     -s ALLOW_MEMORY_GROWTH=1 -s EXPORTED_RUNTIME_METHODS=HEAP8
+python3 -m http.server 8000   # any static server
+# open http://localhost:8000/einz.html
+```
+
+Both builds share `engine.hpp` + `platform.hpp` — only the backend (`terminal.hpp` vs `wasm.hpp`) and the entry-point `.cpp` differ.
 
 ## Tuning
 
@@ -69,6 +82,18 @@ constexpr float DAMPING                = 20.0f;
 | `_`    | Bridge         | brown        |
 | `.`    | Floor          | dim gray     |
 | `♥` `♡` | HP heart full/empty | red / gray |
+
+## Files
+
+| File | Role |
+| ---- | ---- |
+| `platform.hpp` | Shared ABI: `DynamicArray`, `Key`, `Cell`, `RenderFrame`, abstract `Renderer` / `InputSource`. |
+| `engine.hpp` | All game logic: `cfg`, enums, `Entity`, `World`. Depends only on `platform.hpp`. |
+| `terminal.hpp` | POSIX backend + `run_terminal()` main loop (sleep_until, SIGINT). |
+| `project-einz.cpp` | POSIX entry: builds `World`, calls `run_terminal`. |
+| `wasm.hpp` | WebAssembly backend + `run_wasm()` (registers a `requestAnimationFrame` callback). |
+| `wasm-einz.cpp` | Wasm entry: builds `World`, calls `run_wasm`. |
+| `shell.html` | HTML shell used by emcc — owns the DOM grid + JS-side diff cache + keyboard listener. |
 
 ## Architecture overview
 
