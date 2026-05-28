@@ -50,12 +50,14 @@ Manual commands if you want them:
 # Terminal (POSIX — macOS / Linux)
 clang++ -std=c++17 -O2 project-einz.cpp -o einz
 
-# Web (emscripten)
-emcc wasm-einz.cpp -o einz.html --shell-file shell.html -O2 \
+# Web (emscripten) — output goes wherever you point -o
+emcc wasm-einz.cpp -o docs/index.html --shell-file shell.html -O2 \
      -s ALLOW_MEMORY_GROWTH=1 -s EXPORTED_RUNTIME_METHODS=HEAP8
 ```
 
 Both builds share `engine.hpp` + `platform.hpp` — only the backend (`terminal.hpp` vs `wasm.hpp`) and the entry-point `.cpp` differ.
+
+GitHub Pages is updated automatically on push to `master` by `.github/workflows/pages.yml`, which runs `make pages` in CI and uploads `docs/` as the Pages artifact.
 
 ## Tuning
 
@@ -101,28 +103,36 @@ constexpr float DAMPING                = 20.0f;
 | `wasm.hpp` | WebAssembly backend + `run_wasm()` (registers a `requestAnimationFrame` callback). |
 | `wasm-einz.cpp` | Wasm entry: builds `World`, calls `run_wasm`. |
 | `shell.html` | HTML shell used by emcc — owns the DOM grid + JS-side diff cache + keyboard listener. |
+| `Makefile` | Build targets (`terminal`, `pages`, `web`, `run`, `clean`). |
+| `.github/workflows/pages.yml` | CI: rebuilds wasm and redeploys GitHub Pages on every push. |
 
 ## Architecture overview
 
+Each frame, the backend (`run_terminal` / `run_wasm`) drives the same engine pipeline:
+
 ```
-main loop
- ├─ read_key  (non-blocking, raw mode)
+backend loop
+ ├─ input.poll()              (TerminalInput: read() + ESC parse;
+ │                             WasmInput: drain JS keyQueue)
  ├─ world.handle_input(key)
  ├─ world.update(dt)
- │   ├─ compute_pathfinding  (BFS, every 200ms)
- │   ├─ spawn_system         (timers)
- │   ├─ enemy_ai_system      (gradient descent on dist_field)
+ │   ├─ compute_pathfinding   (BFS, every 200ms)
+ │   ├─ spawn_system          (timers)
+ │   ├─ enemy_ai_system       (gradient descent on dist_field)
  │   ├─ speed_limit_system
- │   ├─ movement_system      (per-axis, wall slide)
- │   ├─ bullet_system        (tile sweep, wall/enemy hit)
+ │   ├─ movement_system       (per-axis, wall slide)
+ │   ├─ bullet_system         (tile sweep, wall/enemy hit)
  │   ├─ pickup_system
- │   ├─ enemy_damage_system  (i-frames)
- │   ├─ effects_system       (hit flash decay)
- │   └─ friction_system      (linear damping)
- └─ world.render(fps)
-     ├─ build_cells          (game state -> IR)
-     └─ emit_diff            (IR vs prev -> ANSI commands)
+ │   ├─ enemy_damage_system   (i-frames)
+ │   ├─ effects_system        (hit flash decay)
+ │   └─ friction_system       (linear damping)
+ ├─ world.prepare_frame(fps)  (game state -> Cell grid IR)
+ └─ renderer.present(world.get_frame())
+     ├─ TerminalRenderer: diff vs prev_cells -> ANSI escape stream
+     └─ WasmRenderer:     pass cell ptr to JS, which diffs and patches DOM
 ```
+
+The engine never calls into the renderer or input source — it just produces IR and consumes `Key` values. Swapping backends is a constructor change in the entry-point `.cpp`.
 
 ## License
 
