@@ -1,9 +1,8 @@
-#include <iostream>
+#include "platform.hpp"
+#include "terminal.hpp"
+
 #include <thread>
 #include <csignal>
-#include <fcntl.h>
-#include <termios.h>
-#include <unistd.h>
 
 // ============================================================
 // Tuning constants — change these to fine-tune the game.
@@ -74,112 +73,6 @@ namespace cfg
    constexpr float FPS_EMA_ALPHA  = 0.05f;
 }
 
-template <typename T>
-class DynamicArray
-{
-private:
-   T *data;
-   size_t size;
-   size_t capacity;
-
-   void resize(size_t new_capacity)
-   {
-      if (new_capacity == 0)
-         new_capacity = 1;
-      T *new_data = new T[new_capacity];
-      std::copy(data, data + size, new_data);
-      delete[] data;
-      data = new_data;
-      capacity = new_capacity;
-   }
-
-public:
-   DynamicArray() : data(new T[8]), size(0), capacity(8) {}
-
-   DynamicArray(size_t initial_capacity) : data(new T[initial_capacity]), size(0), capacity(initial_capacity) {}
-
-   DynamicArray(const DynamicArray &other) : data(new T[other.capacity]), size(other.size), capacity(other.capacity)
-   {
-      std::copy(other.data, other.data + other.size, data);
-   }
-
-   DynamicArray(DynamicArray &&other) noexcept : data(other.data), size(other.size), capacity(other.capacity)
-   {
-      other.data = nullptr;
-      other.size = 0;
-      other.capacity = 0;
-   }
-
-   DynamicArray &operator=(DynamicArray other) noexcept
-   {
-      std::swap(data, other.data);
-      std::swap(size, other.size);
-      std::swap(capacity, other.capacity);
-      return *this;
-   }
-
-   ~DynamicArray() { delete[] data; }
-
-   void push_back(const T &value)
-   {
-      if (size == capacity)
-         resize(capacity * 2);
-      data[size++] = value;
-   }
-
-   void pop_back()
-   {
-      if (size > 0)
-         --size;
-   }
-
-   void clear() { size = 0; }
-
-   T &operator[](size_t index)
-   {
-      if (index >= size)
-         throw std::out_of_range("Index out of range");
-      return data[index];
-   }
-
-   const T &operator[](size_t index) const
-   {
-      if (index >= size)
-         throw std::out_of_range("Index out of range");
-      return data[index];
-   }
-
-   size_t get_size() const { return size; }
-
-   class Iterator
-   {
-   private:
-      T *ptr;
-
-   public:
-      Iterator(T *p) : ptr(p) {}
-
-      T &operator*() { return *ptr; }
-
-      Iterator &operator++()
-      {
-         ptr++;
-         return *this;
-      }
-
-      Iterator operator++(int)
-      {
-         Iterator temp = *this;
-         ptr++;
-         return temp;
-      }
-
-      bool operator!=(const Iterator &other) const { return ptr != other.ptr; }
-   };
-
-   Iterator begin() { return Iterator(data); }
-   Iterator end() { return Iterator(data + size); }
-};
 
 enum class EntityType
 {
@@ -193,17 +86,6 @@ enum class EntityType
    Tree
 };
 
-enum class Key
-{
-   None,
-   Up,
-   Down,
-   Left,
-   Right,
-   Shoot,
-   Restart,
-   Quit
-};
 
 enum class Direction
 {
@@ -260,41 +142,6 @@ struct HitEffect
    float time = 0.0f;
 };
 
-// Intermediate representation cell. Each tile = (glyph, color index).
-// Special glyph chars map to unicode in emit: '#' -> ▓, 'H' -> ♥, 'h' -> ♡.
-struct Cell
-{
-   char ch = ' ';
-   signed char color = -1;
-};
-
-// Platform-independent snapshot of what should be on screen this frame.
-// World produces; Renderer consumes.
-struct RenderFrame
-{
-   int width = 0;
-   int height = 0;
-   const Cell *cells = nullptr;  // pointer into World's current_cells, size = width*height
-};
-
-// Abstract renderer interface. Concrete impls (terminal, web, SDL...)
-// translate the cell-grid IR into native draw commands.
-class Renderer
-{
-public:
-   virtual ~Renderer() = default;
-   virtual void init() = 0;
-   virtual void shutdown() = 0;
-   virtual void present(const RenderFrame &frame) = 0;
-};
-
-// Abstract non-blocking input source. Returns Key::None if no key pressed.
-class InputSource
-{
-public:
-   virtual ~InputSource() = default;
-   virtual Key poll() = 0;
-};
 
 class World
 {
@@ -1244,147 +1091,8 @@ public:
    int get_height() const { return height; }
 };
 
-// ============================================================
-// POSIX terminal-specific Renderer + InputSource.
-// To port to another platform, write a new Renderer/InputSource
-// pair and swap them in main().
-// ============================================================
+#include "terminal.hpp"
 
-class TerminalRenderer : public Renderer
-{
-private:
-   termios original_termios;
-   bool raw_mode_active = false;
-   DynamicArray<Cell> prev_cells;
-
-public:
-   ~TerminalRenderer() override { shutdown(); }
-
-   void init() override
-   {
-      tcgetattr(STDIN_FILENO, &original_termios);
-      termios raw = original_termios;
-      raw.c_lflag &= ~(ICANON | ECHO);
-      raw.c_cc[VMIN] = 0;
-      raw.c_cc[VTIME] = 0;
-      tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-      std::cout << "\033[?1049h\033[?25l" << std::flush;
-      raw_mode_active = true;
-   }
-
-   void shutdown() override
-   {
-      if (!raw_mode_active)
-         return;
-      tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_termios);
-      std::cout << "\033[?25h\033[?1049l" << std::flush;
-      raw_mode_active = false;
-   }
-
-   void present(const RenderFrame &frame) override
-   {
-      static const char *color_seqs[] = {
-         "\033[0;1;34m",      // 0 player blue
-         "\033[0;1;31m",      // 1 enemy red / heart filled
-         "\033[0;1;35m",      // 2 strong magenta
-         "\033[0;1;33m",      // 3 yellow
-         "\033[0;1;37m",      // 4 bullets white
-         "\033[0;1;32m",      // 5 grass / tree green
-         "\033[0;38;5;240m",  // 6 wall dim
-         "\033[0;90m",        // 7 floor gray / empty heart
-         "\033[0m",           // 8 HUD default
-         "\033[0;1;36m",      // 9 water bold cyan
-         "\033[0;38;5;130m",  // 10 bridge brown
-      };
-
-      size_t expected = static_cast<size_t>(frame.width * frame.height);
-      while (prev_cells.get_size() < expected)
-         prev_cells.push_back(Cell{});
-
-      std::string buffer;
-      buffer.reserve(2048);
-
-      int last_x = -2, last_y = -2;
-      int last_color = -2;
-
-      for (int y = 0; y < frame.height; ++y)
-      {
-         for (int x = 0; x < frame.width; ++x)
-         {
-            size_t idx = static_cast<size_t>(y * frame.width + x);
-            const Cell &cur = frame.cells[idx];
-            Cell &prv = prev_cells[idx];
-            if (cur.ch == prv.ch && cur.color == prv.color)
-               continue;
-
-            if (y != last_y || x != last_x + 1)
-            {
-               buffer += "\033[";
-               buffer += std::to_string(y + 1);
-               buffer += ";";
-               buffer += std::to_string(x + 1);
-               buffer += "H";
-            }
-
-            if (cur.color != last_color)
-            {
-               if (cur.color < 0)
-                  buffer += "\033[0m";
-               else
-                  buffer += color_seqs[cur.color];
-               last_color = cur.color;
-            }
-
-            switch (cur.ch)
-            {
-               case '#': buffer += "\xe2\x96\x93"; break;
-               case 'H': buffer += "\xe2\x99\xa5"; break;
-               case 'h': buffer += "\xe2\x99\xa1"; break;
-               default:  buffer += cur.ch;
-            }
-
-            prv = cur;  // sync the previous-frame snapshot
-            last_x = x;
-            last_y = y;
-         }
-      }
-
-      if (!buffer.empty())
-      {
-         buffer += "\033[0m";
-         std::cout << buffer << std::flush;
-      }
-   }
-};
-
-class TerminalInput : public InputSource
-{
-public:
-   Key poll() override
-   {
-      char buf[8];
-      ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
-      if (n <= 0)
-         return Key::None;
-      if (n == 1)
-      {
-         if (buf[0] == 'q' || buf[0] == 'Q') return Key::Quit;
-         if (buf[0] == 'r' || buf[0] == 'R') return Key::Restart;
-         if (buf[0] == ' ' || buf[0] == 'j' || buf[0] == 'J') return Key::Shoot;
-      }
-      if (n >= 3 && buf[0] == '\x1b' && buf[1] == '[')
-      {
-         switch (buf[2])
-         {
-            case 'A': return Key::Up;
-            case 'B': return Key::Down;
-            case 'C': return Key::Right;
-            case 'D': return Key::Left;
-         }
-      }
-      return Key::None;
-   }
-};
 
 // SIGINT handler sets a flag; main loop checks it and breaks cleanly,
 // allowing the renderer's destructor to run and restore the terminal.
