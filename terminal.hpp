@@ -2,9 +2,14 @@
 #define PROJECT_EINZ_TERMINAL_HPP
 
 // POSIX terminal backend. Self-contained: include this and it works.
+// Also owns the main loop (`run_terminal`), because the loop's timing
+// model (sleep_until + spin-wait, SIGINT handler) is itself POSIX-specific.
 
 #include "platform.hpp"
+#include "engine.hpp"
 
+#include <thread>
+#include <csignal>
 #include <fcntl.h>
 #include <termios.h>
 #include <unistd.h>
@@ -150,5 +155,62 @@ public:
       return Key::None;
    }
 };
+
+// ============================================================
+// Main loop driver. The engine just hands us its World; we own
+// the loop, the timing, and the SIGINT handler.
+// ============================================================
+
+namespace
+{
+   volatile sig_atomic_t terminal_quit_requested = 0;
+}
+
+inline int run_terminal(World &world, int target_fps, float fps_ema_alpha)
+{
+   std::ios::sync_with_stdio(false);
+
+   TerminalRenderer renderer;
+   TerminalInput input;
+
+   renderer.init();
+   world.init();
+
+   std::signal(SIGINT, [](int) { terminal_quit_requested = 1; });
+
+   const auto frame_duration = std::chrono::microseconds(1000000 / target_fps);
+   auto last = std::chrono::steady_clock::now();
+   auto next_frame = last + frame_duration;
+   float ema_dt = 1.0f / target_fps;
+
+   while (!terminal_quit_requested)
+   {
+      Key key = input.poll();
+      if (key == Key::Quit)
+         break;
+      world.handle_input(key);
+
+      auto now = std::chrono::steady_clock::now();
+      float dt = std::chrono::duration<float>(now - last).count();
+      last = now;
+      ema_dt = ema_dt * (1.0f - fps_ema_alpha) + dt * fps_ema_alpha;
+      float fps = ema_dt > 0.0f ? 1.0f / ema_dt : 0.0f;
+
+      world.update(dt);
+      world.prepare_frame(fps);
+      renderer.present(world.get_frame());
+
+      auto sleep_until = next_frame - std::chrono::milliseconds(1);
+      if (std::chrono::steady_clock::now() < sleep_until)
+         std::this_thread::sleep_until(sleep_until);
+      while (std::chrono::steady_clock::now() < next_frame)
+      {
+      }
+      next_frame += frame_duration;
+   }
+
+   // Renderer destructor will call shutdown() and restore the terminal.
+   return 0;
+}
 
 #endif // PROJECT_EINZ_TERMINAL_HPP
