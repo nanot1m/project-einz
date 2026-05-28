@@ -10,6 +10,8 @@ einz.js
 einz.wasm
 einz.data
 einz.worker.js
+*.wasm.map
+*.js.map
 
 # Object / IR files
 *.o

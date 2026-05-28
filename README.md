@@ -30,22 +30,25 @@ Terminal-based ECS shooter written in C++ as a learning project. Single file, no
 
 ## Build & Run
 
-### Terminal (POSIX)
+Via the Makefile:
 
 ```bash
-clang++ ./project-einz.cpp -o einz
-./einz
+make            # build terminal binary (./einz)
+make run        # build + run terminal binary
+make wasm       # build einz.html + einz.js + einz.wasm
+make web        # build wasm and serve at http://localhost:8000/einz.html
+make clean      # nuke all build artifacts
 ```
 
-Tested on macOS (libc++, clang). Needs `<termios.h>`/`<unistd.h>`/`<fcntl.h>`.
-
-### Web (WebAssembly via emscripten)
+Manual commands if you want them:
 
 ```bash
+# Terminal (POSIX — macOS / Linux)
+clang++ -std=c++17 -O2 project-einz.cpp -o einz
+
+# Web (emscripten)
 emcc wasm-einz.cpp -o einz.html --shell-file shell.html -O2 \
      -s ALLOW_MEMORY_GROWTH=1 -s EXPORTED_RUNTIME_METHODS=HEAP8
-python3 -m http.server 8000   # any static server
-# open http://localhost:8000/einz.html
 ```
 
 Both builds share `engine.hpp` + `platform.hpp` — only the backend (`terminal.hpp` vs `wasm.hpp`) and the entry-point `.cpp` differ.

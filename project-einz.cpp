@@ -5,7 +5,7 @@
 #include "engine.hpp"
 #include "terminal.hpp"
 
-int main(int argc, char *argv[])
+int main()
 {
    std::srand(static_cast<unsigned>(
       std::chrono::steady_clock::now().time_since_epoch().count()));
