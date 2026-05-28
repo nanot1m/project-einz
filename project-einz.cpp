@@ -268,6 +268,34 @@ struct Cell
    signed char color = -1;
 };
 
+// Platform-independent snapshot of what should be on screen this frame.
+// World produces; Renderer consumes.
+struct RenderFrame
+{
+   int width = 0;
+   int height = 0;
+   const Cell *cells = nullptr;  // pointer into World's current_cells, size = width*height
+};
+
+// Abstract renderer interface. Concrete impls (terminal, web, SDL...)
+// translate the cell-grid IR into native draw commands.
+class Renderer
+{
+public:
+   virtual ~Renderer() = default;
+   virtual void init() = 0;
+   virtual void shutdown() = 0;
+   virtual void present(const RenderFrame &frame) = 0;
+};
+
+// Abstract non-blocking input source. Returns Key::None if no key pressed.
+class InputSource
+{
+public:
+   virtual ~InputSource() = default;
+   virtual Key poll() = 0;
+};
+
 class World
 {
 private:
@@ -297,7 +325,6 @@ private:
    DynamicArray<HitEffect> hit_effects;
 
    DynamicArray<Cell> current_cells;
-   DynamicArray<Cell> prev_cells;
 
    DynamicArray<int> dist_field;
    float pathfinding_timer = 0.0f;
@@ -1076,8 +1103,6 @@ public:
       size_t expected = static_cast<size_t>(width * height);
       while (current_cells.get_size() < expected)
          current_cells.push_back(Cell{});
-      while (prev_cells.get_size() < expected)
-         prev_cells.push_back(Cell{});
 
       // Reset current to blank
       Cell blank;
@@ -1201,10 +1226,63 @@ public:
       }
    }
 
-   void emit_diff()
+   void prepare_frame(float fps)
    {
-      // Color sequences. Leading "0;" resets any sticky attributes (bold) so
-      // floor/wall don't inherit bold from a previous entity cell.
+      build_cells(fps);
+   }
+
+   RenderFrame get_frame() const
+   {
+      RenderFrame f;
+      f.width = width;
+      f.height = height;
+      f.cells = current_cells.get_size() > 0 ? &current_cells[0] : nullptr;
+      return f;
+   }
+
+   int get_width() const { return width; }
+   int get_height() const { return height; }
+};
+
+// ============================================================
+// POSIX terminal-specific Renderer + InputSource.
+// To port to another platform, write a new Renderer/InputSource
+// pair and swap them in main().
+// ============================================================
+
+class TerminalRenderer : public Renderer
+{
+private:
+   termios original_termios;
+   bool raw_mode_active = false;
+   DynamicArray<Cell> prev_cells;
+
+public:
+   ~TerminalRenderer() override { shutdown(); }
+
+   void init() override
+   {
+      tcgetattr(STDIN_FILENO, &original_termios);
+      termios raw = original_termios;
+      raw.c_lflag &= ~(ICANON | ECHO);
+      raw.c_cc[VMIN] = 0;
+      raw.c_cc[VTIME] = 0;
+      tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
+      std::cout << "\033[?1049h\033[?25l" << std::flush;
+      raw_mode_active = true;
+   }
+
+   void shutdown() override
+   {
+      if (!raw_mode_active)
+         return;
+      tcsetattr(STDIN_FILENO, TCSAFLUSH, &original_termios);
+      std::cout << "\033[?25h\033[?1049l" << std::flush;
+      raw_mode_active = false;
+   }
+
+   void present(const RenderFrame &frame) override
+   {
       static const char *color_seqs[] = {
          "\033[0;1;34m",      // 0 player blue
          "\033[0;1;31m",      // 1 enemy red / heart filled
@@ -1219,23 +1297,26 @@ public:
          "\033[0;38;5;130m",  // 10 bridge brown
       };
 
+      size_t expected = static_cast<size_t>(frame.width * frame.height);
+      while (prev_cells.get_size() < expected)
+         prev_cells.push_back(Cell{});
+
       std::string buffer;
       buffer.reserve(2048);
 
       int last_x = -2, last_y = -2;
       int last_color = -2;
 
-      for (int y = 0; y < height; ++y)
+      for (int y = 0; y < frame.height; ++y)
       {
-         for (int x = 0; x < width; ++x)
+         for (int x = 0; x < frame.width; ++x)
          {
-            size_t idx = static_cast<size_t>(y * width + x);
-            const Cell &cur = current_cells[idx];
-            const Cell &prv = prev_cells[idx];
+            size_t idx = static_cast<size_t>(y * frame.width + x);
+            const Cell &cur = frame.cells[idx];
+            Cell &prv = prev_cells[idx];
             if (cur.ch == prv.ch && cur.color == prv.color)
                continue;
 
-            // Move cursor unless we're in sequence on the same row
             if (y != last_y || x != last_x + 1)
             {
                buffer += "\033[";
@@ -1262,6 +1343,7 @@ public:
                default:  buffer += cur.ch;
             }
 
+            prv = cur;  // sync the previous-frame snapshot
             last_x = x;
             last_y = y;
          }
@@ -1272,88 +1354,65 @@ public:
          buffer += "\033[0m";
          std::cout << buffer << std::flush;
       }
-
-      // Swap frames so prev now reflects what's on screen.
-      std::swap(current_cells, prev_cells);
-   }
-
-   void render(float fps)
-   {
-      build_cells(fps);
-      emit_diff();
    }
 };
 
-static termios g_original_termios;
-static bool g_raw_mode_active = false;
-
-void disable_raw_mode()
+class TerminalInput : public InputSource
 {
-   if (!g_raw_mode_active)
-      return;
-   tcsetattr(STDIN_FILENO, TCSAFLUSH, &g_original_termios);
-   std::cout << "\033[?25h\033[?1049l" << std::flush;
-   g_raw_mode_active = false;
-}
-
-void enable_raw_mode()
-{
-   tcgetattr(STDIN_FILENO, &g_original_termios);
-   termios raw = g_original_termios;
-   raw.c_lflag &= ~(ICANON | ECHO);
-   raw.c_cc[VMIN] = 0;
-   raw.c_cc[VTIME] = 0;
-   tcsetattr(STDIN_FILENO, TCSAFLUSH, &raw);
-   std::cout << "\033[?1049h\033[?25l" << std::flush;
-   g_raw_mode_active = true;
-}
-
-Key read_key()
-{
-   char buf[8];
-   ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
-   if (n <= 0)
-      return Key::None;
-   if (n == 1)
+public:
+   Key poll() override
    {
-      if (buf[0] == 'q' || buf[0] == 'Q') return Key::Quit;
-      if (buf[0] == 'r' || buf[0] == 'R') return Key::Restart;
-      if (buf[0] == ' ' || buf[0] == 'j' || buf[0] == 'J') return Key::Shoot;
-   }
-   if (n >= 3 && buf[0] == '\x1b' && buf[1] == '[')
-   {
-      switch (buf[2])
+      char buf[8];
+      ssize_t n = read(STDIN_FILENO, buf, sizeof(buf));
+      if (n <= 0)
+         return Key::None;
+      if (n == 1)
       {
-         case 'A': return Key::Up;
-         case 'B': return Key::Down;
-         case 'C': return Key::Right;
-         case 'D': return Key::Left;
+         if (buf[0] == 'q' || buf[0] == 'Q') return Key::Quit;
+         if (buf[0] == 'r' || buf[0] == 'R') return Key::Restart;
+         if (buf[0] == ' ' || buf[0] == 'j' || buf[0] == 'J') return Key::Shoot;
       }
+      if (n >= 3 && buf[0] == '\x1b' && buf[1] == '[')
+      {
+         switch (buf[2])
+         {
+            case 'A': return Key::Up;
+            case 'B': return Key::Down;
+            case 'C': return Key::Right;
+            case 'D': return Key::Left;
+         }
+      }
+      return Key::None;
    }
-   return Key::None;
-}
+};
+
+// SIGINT handler sets a flag; main loop checks it and breaks cleanly,
+// allowing the renderer's destructor to run and restore the terminal.
+static volatile sig_atomic_t g_quit_requested = 0;
 
 int main(int argc, char *argv[])
 {
    std::srand(static_cast<unsigned>(
       std::chrono::steady_clock::now().time_since_epoch().count()));
 
-   World world(512);
-   world.init();
-
    std::ios::sync_with_stdio(false);
 
-   enable_raw_mode();
-   std::atexit(disable_raw_mode);
-   std::signal(SIGINT, [](int) { std::exit(0); });
+   TerminalRenderer renderer;
+   TerminalInput input;
+   World world(512);
+
+   renderer.init();
+   world.init();
+
+   std::signal(SIGINT, [](int) { g_quit_requested = 1; });
 
    const auto frame_duration = std::chrono::microseconds(1000000 / cfg::TARGET_FPS);
    auto last = std::chrono::steady_clock::now();
    auto next_frame = last + frame_duration;
    float ema_dt = 1.0f / cfg::TARGET_FPS;
-   while (true)
+   while (!g_quit_requested)
    {
-      Key key = read_key();
+      Key key = input.poll();
       if (key == Key::Quit)
          break;
       world.handle_input(key);
@@ -1365,7 +1424,8 @@ int main(int argc, char *argv[])
       float fps = ema_dt > 0.0f ? 1.0f / ema_dt : 0.0f;
 
       world.update(dt);
-      world.render(fps);
+      world.prepare_frame(fps);
+      renderer.present(world.get_frame());
 
       auto sleep_until = next_frame - std::chrono::milliseconds(1);
       if (std::chrono::steady_clock::now() < sleep_until)
@@ -1376,5 +1436,6 @@ int main(int argc, char *argv[])
       next_frame += frame_duration;
    }
 
+   // Renderer destructor will call shutdown() and restore the terminal.
    return 0;
 }
