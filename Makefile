@@ -8,7 +8,7 @@ PORT := 8000
 
 CORE_DEPS := platform.hpp engine.hpp
 
-.PHONY: all terminal wasm run web pages clean
+.PHONY: all terminal run web pages clean
 
 # Default target builds the terminal binary.
 all: terminal
@@ -23,21 +23,9 @@ einz: project-einz.cpp $(CORE_DEPS) terminal.hpp
 run: einz
 	./einz
 
-# ---------- WebAssembly ----------
-
-wasm: einz.html
-
-einz.html einz.js einz.wasm: wasm-einz.cpp $(CORE_DEPS) wasm.hpp shell.html
-	$(EMCC) wasm-einz.cpp -o einz.html --shell-file shell.html $(EMCCFLAGS)
-
-# Build + serve via python's HTTP module; visit http://localhost:$(PORT)/einz.html
-web: wasm
-	@echo "Open http://localhost:$(PORT)/einz.html"
-	python3 -m http.server $(PORT)
-
-# ---------- GitHub Pages ----------
-# Builds wasm into ./docs so that GitHub Pages (configured to serve from
-# /docs on master) picks it up at https://<user>.github.io/<repo>/.
+# ---------- WebAssembly / GitHub Pages ----------
+# `make pages` builds the browser bundle into ./docs (consumed by the
+# Pages workflow in CI). `make web` builds + serves it locally.
 
 pages: docs/index.html
 
@@ -47,8 +35,12 @@ docs:
 docs/index.html: wasm-einz.cpp $(CORE_DEPS) wasm.hpp shell.html | docs
 	$(EMCC) wasm-einz.cpp -o docs/index.html --shell-file shell.html $(EMCCFLAGS)
 
+web: pages
+	@echo "Open http://localhost:$(PORT)/"
+	python3 -m http.server $(PORT) -d docs
+
 # ---------- Housekeeping ----------
 
 clean:
-	rm -f einz einz.html einz.js einz.wasm einz.data einz.worker.js *.wasm.map *.js.map
-	rm -rf einz_asan einz_asan.dSYM docs
+	rm -f einz *.wasm.map *.js.map
+	rm -rf docs

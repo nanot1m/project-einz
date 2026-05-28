@@ -39,8 +39,8 @@ Via the Makefile:
 ```bash
 make            # build terminal binary (./einz)
 make run        # build + run terminal binary
-make wasm       # build einz.html + einz.js + einz.wasm
-make web        # build wasm and serve at http://localhost:8000/einz.html
+make pages      # build the browser bundle into ./docs
+make web        # build + serve at http://localhost:8000/
 make clean      # nuke all build artifacts
 ```
 
